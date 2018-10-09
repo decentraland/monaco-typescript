@@ -2,208 +2,236 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-'use strict';
+"use strict";
 
-import * as ts from './lib/typescriptServices';
-import { lib_dts, lib_es6_dts } from './lib/lib';
+import * as ts from "./lib/typescriptServices";
 
 import Promise = monaco.Promise;
 import IWorkerContext = monaco.worker.IWorkerContext;
 
 const DEFAULT_LIB = {
-	NAME: 'defaultLib:lib.d.ts',
-	CONTENTS: lib_dts
-};
-
-const ES6_LIB = {
-	NAME: 'defaultLib:lib.es6.d.ts',
-	CONTENTS: lib_es6_dts
+  NAME: "defaultLib:lib.d.ts",
+  CONTENTS: `
+    /** Decentraland lib test */
+    declare function teste(): void;
+  `
 };
 
 export class TypeScriptWorker implements ts.LanguageServiceHost {
+  // --- model sync -----------------------
 
-	// --- model sync -----------------------
+  private _ctx: IWorkerContext;
+  private _extraLibs: { [fileName: string]: string } = Object.create(null);
+  private _languageService = ts.createLanguageService(this);
+  private _compilerOptions: ts.CompilerOptions;
+  private loadedFiles = new Map<string /*fileName*/, { content: string; version: number }>();
 
-	private _ctx: IWorkerContext;
-	private _extraLibs: { [fileName: string]: string } = Object.create(null);
-	private _languageService = ts.createLanguageService(this);
-	private _compilerOptions: ts.CompilerOptions;
+  constructor(ctx: IWorkerContext, createData: ICreateData) {
+    this._ctx = ctx;
+    this._compilerOptions = createData.compilerOptions;
+    this._extraLibs = createData.extraLibs;
 
-	constructor(ctx: IWorkerContext, createData: ICreateData) {
-		this._ctx = ctx;
-		this._compilerOptions = createData.compilerOptions;
-		this._extraLibs = createData.extraLibs;
-	}
+    setInterval(() => console.log(this._ctx.getMirrorModels().map($ => $.uri.toString())), 1000);
+  }
 
-	// --- language service host ---------------
+  // --- language service host ---------------
 
-	getCompilationSettings(): ts.CompilerOptions {
-		return this._compilerOptions;
-	}
+  getCompilationSettings(): ts.CompilerOptions {
+    return this._compilerOptions;
+  }
 
-	getScriptFileNames(): string[] {
-		let models = this._ctx.getMirrorModels().map(model => model.uri.toString());
-		return models.concat(Object.keys(this._extraLibs));
-	}
+  getScriptFileNames(): string[] {
+    this._ctx.getMirrorModels().forEach(model => {
+      const path = model.uri.toString();
 
-	private _getModel(fileName: string): monaco.worker.IMirrorModel {
-		let models = this._ctx.getMirrorModels();
-		for (let i = 0; i < models.length; i++) {
-			if (models[i].uri.toString() === fileName) {
-				return models[i];
-			}
-		}
-		return null;
-	}
+      this.loadedFiles.set(path, { content: model.getValue(), version: model.version });
 
-	getScriptVersion(fileName: string): string {
-		let model = this._getModel(fileName);
-		if (model) {
-			return model.version.toString();
-		} else if (this.isDefaultLibFileName(fileName) || fileName in this._extraLibs) {
-			// extra lib and default lib are static
-			return '1';
-		}
-	}
+      return path;
+    });
 
-	getScriptSnapshot(fileName: string): ts.IScriptSnapshot {
-		let text: string;
-		let model = this._getModel(fileName);
-		if (model) {
-			// a true editor model
-			text = model.getValue();
+    let models = [];
 
-		} else if (fileName in this._extraLibs) {
-			// static extra lib
-			text = this._extraLibs[fileName];
+    this.loadedFiles.forEach((_, $) => models.push($));
 
-		} else if (fileName === DEFAULT_LIB.NAME) {
-			text = DEFAULT_LIB.CONTENTS;
-		} else if (fileName === ES6_LIB.NAME) {
-			text = ES6_LIB.CONTENTS;
-		} else {
-			return;
-		}
+    return models.concat(Object.keys(this._extraLibs));
+  }
 
-		return <ts.IScriptSnapshot>{
-			getText: (start, end) => text.substring(start, end),
-			getLength: () => text.length,
-			getChangeRange: () => undefined
-		};
-	}
+  private _getModel(fileName: string): monaco.worker.IMirrorModel {
+    let models = this._ctx.getMirrorModels();
+    for (let i = 0; i < models.length; i++) {
+      if (models[i].uri.toString() === fileName) {
+        return models[i];
+      }
+    }
+    return null;
+  }
 
-	getScriptKind?(fileName: string): ts.ScriptKind {
-		const suffix = fileName.substr(fileName.lastIndexOf('.') + 1);
-		switch (suffix) {
-			case 'ts': return ts.ScriptKind.TS;
-			case 'tsx': return ts.ScriptKind.TSX;
-			case 'js': return ts.ScriptKind.JS;
-			case 'jsx': return ts.ScriptKind.JSX;
-			default: return this.getCompilationSettings().allowJs
-				? ts.ScriptKind.JS
-				: ts.ScriptKind.TS;
-		}
-	}
+  getScriptVersion(fileName: string): string {
+    let model = this._getModel(fileName);
+    if (model) {
+      return model.version.toString();
+    } else if (this.isDefaultLibFileName(fileName) || fileName in this._extraLibs) {
+      // extra lib and default lib are static
+      return "1";
+    } else if (this.loadedFiles.has(fileName)) {
+      return this.loadedFiles.get(fileName).version.toString();
+    }
+  }
 
-	getCurrentDirectory(): string {
-		return '';
-	}
+  getScriptSnapshot(fileName: string): ts.IScriptSnapshot {
+    let text: string;
 
-	getDefaultLibFileName(options: ts.CompilerOptions): string {
-		// TODO@joh support lib.es7.d.ts
-		return options.target <= ts.ScriptTarget.ES5 ? DEFAULT_LIB.NAME : ES6_LIB.NAME;
-	}
+    let model = this._getModel(fileName);
 
-	isDefaultLibFileName(fileName: string): boolean {
-		return fileName === this.getDefaultLibFileName(this._compilerOptions);
-	}
+    if (model) {
+      // a true editor model
+      text = model.getValue();
+      this.loadedFiles.set(fileName, { content: text, version: model.version });
+    } else if (fileName in this._extraLibs) {
+      // static extra lib
+      text = this._extraLibs[fileName];
+    } else if (fileName === DEFAULT_LIB.NAME) {
+      text = DEFAULT_LIB.CONTENTS;
+    } else if (this.loadedFiles.has(fileName)) {
+      text = this.loadedFiles.get(fileName).content;
+    } else {
+      return;
+    }
 
-	// --- language features
+    return <ts.IScriptSnapshot>{
+      getText: (start, end) => text.substring(start, end),
+      getLength: () => text.length,
+      getChangeRange: () => undefined
+    };
+  }
 
-	private static clearFiles(diagnostics: ts.Diagnostic[]) {
-		// Clear the `file` field, which cannot be JSON'yfied because it
-		// contains cyclic data structures.
-		diagnostics.forEach(diag => {
-			diag.file = undefined;
-			const related = <ts.Diagnostic[]>diag.relatedInformation;
-			if (related) {
-				related.forEach(diag2 => diag2.file = undefined);
-			}
-		});
-	}
+  getScriptKind?(fileName: string): ts.ScriptKind {
+    const suffix = fileName.substr(fileName.lastIndexOf(".") + 1);
+    switch (suffix) {
+      case "ts":
+        return ts.ScriptKind.TS;
+      case "tsx":
+        return ts.ScriptKind.TSX;
+      case "js":
+        return ts.ScriptKind.JS;
+      case "jsx":
+        return ts.ScriptKind.JSX;
+      default:
+        return this.getCompilationSettings().allowJs ? ts.ScriptKind.JS : ts.ScriptKind.TS;
+    }
+  }
 
-	getSyntacticDiagnostics(fileName: string): Promise<ts.Diagnostic[]> {
-		const diagnostics = this._languageService.getSyntacticDiagnostics(fileName);
-		TypeScriptWorker.clearFiles(diagnostics);
-		return Promise.as(diagnostics);
-	}
+  getCurrentDirectory(): string {
+    return "";
+  }
 
-	getSemanticDiagnostics(fileName: string): Promise<ts.Diagnostic[]> {
-		const diagnostics = this._languageService.getSemanticDiagnostics(fileName);
-		TypeScriptWorker.clearFiles(diagnostics);
-		return Promise.as(diagnostics);
-	}
+  getDefaultLibFileName(options: ts.CompilerOptions): string {
+    // TODO@joh support lib.es7.d.ts
+    return DEFAULT_LIB.NAME;
+  }
 
-	getCompilerOptionsDiagnostics(fileName: string): Promise<ts.Diagnostic[]> {
-		const diagnostics = this._languageService.getCompilerOptionsDiagnostics();
-		TypeScriptWorker.clearFiles(diagnostics);
-		return Promise.as(diagnostics);
-	}
+  isDefaultLibFileName(fileName: string): boolean {
+    return fileName === this.getDefaultLibFileName(this._compilerOptions);
+  }
 
-	getCompletionsAtPosition(fileName: string, position: number): Promise<ts.CompletionInfo> {
-		return Promise.as(this._languageService.getCompletionsAtPosition(fileName, position, undefined));
-	}
+  // --- language features
 
-	getCompletionEntryDetails(fileName: string, position: number, entry: string): Promise<ts.CompletionEntryDetails> {
-		return Promise.as(this._languageService.getCompletionEntryDetails(fileName, position, entry, undefined, undefined, undefined));
-	}
+  private static clearFiles(diagnostics: ts.Diagnostic[]) {
+    // Clear the `file` field, which cannot be JSON'yfied because it
+    // contains cyclic data structures.
+    diagnostics.forEach(diag => {
+      diag.file = undefined;
+      const related = <ts.Diagnostic[]>diag.relatedInformation;
+      if (related) {
+        related.forEach(diag2 => (diag2.file = undefined));
+      }
+    });
+  }
 
-	getSignatureHelpItems(fileName: string, position: number): Promise<ts.SignatureHelpItems> {
-		return Promise.as(this._languageService.getSignatureHelpItems(fileName, position, undefined));
-	}
+  getSyntacticDiagnostics(fileName: string): Promise<ts.Diagnostic[]> {
+    const diagnostics = this._languageService.getSyntacticDiagnostics(fileName);
+    TypeScriptWorker.clearFiles(diagnostics);
+    return Promise.as(diagnostics);
+  }
 
-	getQuickInfoAtPosition(fileName: string, position: number): Promise<ts.QuickInfo> {
-		return Promise.as(this._languageService.getQuickInfoAtPosition(fileName, position));
-	}
+  getSemanticDiagnostics(fileName: string): Promise<ts.Diagnostic[]> {
+    const diagnostics = this._languageService.getSemanticDiagnostics(fileName);
+    TypeScriptWorker.clearFiles(diagnostics);
+    return Promise.as(diagnostics);
+  }
 
-	getOccurrencesAtPosition(fileName: string, position: number): Promise<ts.ReferenceEntry[]> {
-		return Promise.as(this._languageService.getOccurrencesAtPosition(fileName, position));
-	}
+  getCompilerOptionsDiagnostics(fileName: string): Promise<ts.Diagnostic[]> {
+    const diagnostics = this._languageService.getCompilerOptionsDiagnostics();
+    TypeScriptWorker.clearFiles(diagnostics);
+    return Promise.as(diagnostics);
+  }
 
-	getDefinitionAtPosition(fileName: string, position: number): Promise<ts.DefinitionInfo[]> {
-		return Promise.as(this._languageService.getDefinitionAtPosition(fileName, position));
-	}
+  getCompletionsAtPosition(fileName: string, position: number): Promise<ts.CompletionInfo> {
+    return Promise.as(this._languageService.getCompletionsAtPosition(fileName, position, undefined));
+  }
 
-	getReferencesAtPosition(fileName: string, position: number): Promise<ts.ReferenceEntry[]> {
-		return Promise.as(this._languageService.getReferencesAtPosition(fileName, position));
-	}
+  getCompletionEntryDetails(fileName: string, position: number, entry: string): Promise<ts.CompletionEntryDetails> {
+    return Promise.as(
+      this._languageService.getCompletionEntryDetails(fileName, position, entry, undefined, undefined, undefined)
+    );
+  }
 
-	getNavigationBarItems(fileName: string): Promise<ts.NavigationBarItem[]> {
-		return Promise.as(this._languageService.getNavigationBarItems(fileName));
-	}
+  getSignatureHelpItems(fileName: string, position: number): Promise<ts.SignatureHelpItems> {
+    return Promise.as(this._languageService.getSignatureHelpItems(fileName, position, undefined));
+  }
 
-	getFormattingEditsForDocument(fileName: string, options: ts.FormatCodeOptions): Promise<ts.TextChange[]> {
-		return Promise.as(this._languageService.getFormattingEditsForDocument(fileName, options));
-	}
+  getQuickInfoAtPosition(fileName: string, position: number): Promise<ts.QuickInfo> {
+    return Promise.as(this._languageService.getQuickInfoAtPosition(fileName, position));
+  }
 
-	getFormattingEditsForRange(fileName: string, start: number, end: number, options: ts.FormatCodeOptions): Promise<ts.TextChange[]> {
-		return Promise.as(this._languageService.getFormattingEditsForRange(fileName, start, end, options));
-	}
+  getOccurrencesAtPosition(fileName: string, position: number): Promise<ts.ReferenceEntry[]> {
+    return Promise.as(this._languageService.getOccurrencesAtPosition(fileName, position));
+  }
 
-	getFormattingEditsAfterKeystroke(fileName: string, postion: number, ch: string, options: ts.FormatCodeOptions): Promise<ts.TextChange[]> {
-		return Promise.as(this._languageService.getFormattingEditsAfterKeystroke(fileName, postion, ch, options));
-	}
+  getDefinitionAtPosition(fileName: string, position: number): Promise<ts.DefinitionInfo[]> {
+    return Promise.as(this._languageService.getDefinitionAtPosition(fileName, position));
+  }
 
-	getEmitOutput(fileName: string): Promise<ts.EmitOutput> {
-		return Promise.as(this._languageService.getEmitOutput(fileName));
-	}
+  getReferencesAtPosition(fileName: string, position: number): Promise<ts.ReferenceEntry[]> {
+    return Promise.as(this._languageService.getReferencesAtPosition(fileName, position));
+  }
+
+  getNavigationBarItems(fileName: string): Promise<ts.NavigationBarItem[]> {
+    return Promise.as(this._languageService.getNavigationBarItems(fileName));
+  }
+
+  getFormattingEditsForDocument(fileName: string, options: ts.FormatCodeOptions): Promise<ts.TextChange[]> {
+    return Promise.as(this._languageService.getFormattingEditsForDocument(fileName, options));
+  }
+
+  getFormattingEditsForRange(
+    fileName: string,
+    start: number,
+    end: number,
+    options: ts.FormatCodeOptions
+  ): Promise<ts.TextChange[]> {
+    return Promise.as(this._languageService.getFormattingEditsForRange(fileName, start, end, options));
+  }
+
+  getFormattingEditsAfterKeystroke(
+    fileName: string,
+    postion: number,
+    ch: string,
+    options: ts.FormatCodeOptions
+  ): Promise<ts.TextChange[]> {
+    return Promise.as(this._languageService.getFormattingEditsAfterKeystroke(fileName, postion, ch, options));
+  }
+
+  getEmitOutput(fileName: string): Promise<ts.EmitOutput> {
+    return Promise.as(this._languageService.getEmitOutput(fileName));
+  }
 }
 
 export interface ICreateData {
-	compilerOptions: ts.CompilerOptions;
-	extraLibs: { [path: string]: string };
+  compilerOptions: ts.CompilerOptions;
+  extraLibs: { [path: string]: string };
 }
 
 export function create(ctx: IWorkerContext, createData: ICreateData): TypeScriptWorker {
-	return new TypeScriptWorker(ctx, createData);
+  return new TypeScriptWorker(ctx, createData);
 }
