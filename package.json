@@ -1,5 +1,5 @@
 {
-  "name": "monaco-typescript",
+  "name": "dcl-monaco-typescript",
   "version": "3.2.0",
   "description": "TypeScript and JavaScript language support for Monaco Editor",
   "scripts": {
@@ -10,14 +10,14 @@
     "prepublish": "npm run compile && node ./scripts/bundle && mcopy ./src/monaco.d.ts ./release/monaco.d.ts",
     "import-typescript": "node ./scripts/importTypescript"
   },
-  "author": "Microsoft Corporation",
+  "author": "Microsoft Corporation & Decentraland",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Microsoft/monaco-typescript"
+    "url": "https://github.com/decentraland/monaco-typescript"
   },
   "bugs": {
-    "url": "https://github.com/Microsoft/monaco-typescript/issues"
+    "url": "https://github.com/decentraland/monaco-typescript/issues"
   },
   "devDependencies": {
     "monaco-editor-core": "0.14.1",
