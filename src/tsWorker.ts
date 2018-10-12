@@ -30,8 +30,6 @@ export class TypeScriptWorker implements ts.LanguageServiceHost {
     this._ctx = ctx;
     this._compilerOptions = createData.compilerOptions;
     this._extraLibs = createData.extraLibs;
-
-    setInterval(() => console.log(this._ctx.getMirrorModels().map($ => $.uri.toString())), 1000);
   }
 
   // --- language service host ---------------
